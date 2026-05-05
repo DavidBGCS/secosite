@@ -109,6 +109,66 @@ export function SitePartsPage() {
     );
   }, [typedSiteFile]);
 
+  const handleEditPart = async (part: InstalledPartRecord) => {
+    if (!typedSiteFile) return;
+
+    const newTitle = window.prompt("Part name:", part.title ?? "");
+    if (newTitle === null) return;
+
+    const newQtyInput = window.prompt("Quantity:", String(part.quantity ?? 1));
+    if (newQtyInput === null) return;
+
+    const newQty = Number(newQtyInput);
+
+    if (!Number.isFinite(newQty) || newQty < 0) {
+      window.alert("Please enter a valid quantity.");
+      return;
+    }
+
+    const newLocation = window.prompt("Location:", part.locationText ?? "");
+    if (newLocation === null) return;
+
+    const newNotes = window.prompt("Notes:", part.notes ?? "");
+    if (newNotes === null) return;
+
+    const updatedParts = (typedSiteFile.installedParts ?? []).map((existingPart) =>
+      existingPart.id === part.id
+        ? {
+            ...existingPart,
+            title: newTitle.trim(),
+            quantity: newQty,
+            locationText: newLocation.trim(),
+            notes: newNotes.trim(),
+            updatedAt: new Date().toISOString(),
+          }
+        : existingPart
+    );
+
+    await updateSite({
+      ...typedSiteFile,
+      installedParts: updatedParts,
+    });
+  };
+
+  const handleDeletePart = async (part: InstalledPartRecord) => {
+    if (!typedSiteFile) return;
+
+    const confirmed = window.confirm(
+      `Delete this part?\n\n${part.title} x${part.quantity}`
+    );
+
+    if (!confirmed) return;
+
+    const updatedParts = (typedSiteFile.installedParts ?? []).filter(
+      (existingPart) => existingPart.id !== part.id
+    );
+
+    await updateSite({
+      ...typedSiteFile,
+      installedParts: updatedParts,
+    });
+  };
+
   if (loading) {
     return (
       <AppLayout title="Installed Parts">
@@ -327,6 +387,20 @@ export function SitePartsPage() {
                       <strong>Notes:</strong> {part.notes ?? "—"}
                     </div>
                   </div>
+
+                  <div style={partButtonRowStyle}>
+                    <SecondaryButton onClick={() => handleEditPart(part)}>
+                      Edit
+                    </SecondaryButton>
+
+                    <button
+                      type="button"
+                      onClick={() => handleDeletePart(part)}
+                      style={deleteButtonStyle}
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -518,6 +592,24 @@ const detailGridStyle: CSSProperties = {
   gap: "8px 12px",
   color: "#374151",
   fontSize: "0.92rem",
+};
+
+const partButtonRowStyle: CSSProperties = {
+  display: "flex",
+  gap: "8px",
+  justifyContent: "flex-end",
+  borderTop: "1px solid #e5e7eb",
+  paddingTop: "10px",
+};
+
+const deleteButtonStyle: CSSProperties = {
+  border: "1px solid #fecaca",
+  background: "#fee2e2",
+  color: "#991b1b",
+  borderRadius: "12px",
+  padding: "10px 14px",
+  fontWeight: 900,
+  cursor: "pointer",
 };
 
 const pillStyle: CSSProperties = {

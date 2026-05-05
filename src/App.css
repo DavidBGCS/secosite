@@ -181,4 +181,34 @@
     right: 0;
     border-right-color: var(--border);
   }
+
+html {
+  color-scheme: light;
+}
+
+body {
+  background: #f5f7fb;
+  color: #111827;
+}
+
+input,
+select,
+textarea,
+button {
+  color-scheme: light;
+}
+
+input,
+select,
+textarea {
+  background: #ffffff !important;
+  color: #111827 !important;
+  border: 1px solid #d1d5db;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #6b7280;
+}
+
 }
