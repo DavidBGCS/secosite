@@ -339,6 +339,40 @@ export function SitePartsPage() {
     setMessage("Visit deleted.");
   };
 
+  const handleMoveLegacyToVisitOne = async () => {
+    if (!typedSiteFile || !visits.length) return;
+
+    const visitOne = visits[0];
+
+    const updatedActions = (typedSiteFile.partActions ?? []).map((action) =>
+      !action.visitId || action.visitId === "no-active-visit"
+        ? { ...action, visitId: visitOne.id }
+        : action
+    );
+
+    await updateSite({
+      ...typedSiteFile,
+      partActions: updatedActions,
+      metadata: {
+        ...typedSiteFile.metadata,
+        updatedAt: nowIso(),
+      },
+    });
+
+    setSelectedVisitId(visitOne.id);
+    setHighlightVisitId(visitOne.id);
+    setMessage("Legacy parts moved to Visit 1.");
+
+    setTimeout(() => {
+      visitRefs.current[visitOne.id]?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }, 200);
+
+    setTimeout(() => setHighlightVisitId(undefined), 2500);
+  };
+
   const openAddPartForVisit = (visitId: string) => {
     setSelectedVisitId(visitId);
     setShowAddModal(true);
@@ -370,6 +404,8 @@ export function SitePartsPage() {
       </AppLayout>
     );
   }
+
+  const unassignedActions = actionsByVisitId.get("no-active-visit") ?? [];
 
   return (
     <AppLayout
@@ -480,6 +516,7 @@ export function SitePartsPage() {
                 const visitActions = actionsByVisitId.get(visit.id) ?? [];
                 const visitTitle = getVisitDateLabel(visit, index);
                 const isHighlighted = highlightVisitId === visit.id;
+                const isSelected = selectedVisit?.id === visit.id;
 
                 return (
                   <div
@@ -500,6 +537,23 @@ export function SitePartsPage() {
                           {visit.startedAt
                             ? formatIrishDateTime(visit.startedAt)
                             : "No start time"}
+                        </div>
+
+                        <div style={{ marginTop: "10px" }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedVisitId(visit.id);
+                              setMessage(`Selected ${visit.visitType}`);
+                            }}
+                            style={
+                              isSelected
+                                ? selectedVisitButtonActiveStyle
+                                : selectedVisitButtonStyle
+                            }
+                          >
+                            {isSelected ? "Selected Visit" : "Use This Visit"}
+                          </button>
                         </div>
                       </div>
 
@@ -559,7 +613,7 @@ export function SitePartsPage() {
                 );
               })}
 
-              {actionsByVisitId.get("no-active-visit")?.length ? (
+              {unassignedActions.length ? (
                 <div style={visitCardStyle}>
                   <div style={visitHeaderStyle}>
                     <div>
@@ -568,10 +622,16 @@ export function SitePartsPage() {
                         Parts added before visit tracking was enabled.
                       </div>
                     </div>
+
+                    {visits.length ? (
+                      <PrimaryButton onClick={handleMoveLegacyToVisitOne}>
+                        Move Legacy Parts to Visit 1
+                      </PrimaryButton>
+                    ) : null}
                   </div>
 
                   <div style={visitActionListStyle}>
-                    {(actionsByVisitId.get("no-active-visit") ?? []).map((action) => (
+                    {unassignedActions.map((action) => (
                       <div key={action.id} style={actionRowStyle}>
                         <div>
                           <div style={actionTitleStyle}>
@@ -749,6 +809,24 @@ const chipActiveStyle: CSSProperties = {
   background: "#111827",
   color: "#fff",
   border: "1px solid #111827",
+};
+
+const selectedVisitButtonStyle: CSSProperties = {
+  border: "1px solid #cbd5e1",
+  background: "#ffffff",
+  color: "#0f172a",
+  borderRadius: "10px",
+  padding: "8px 12px",
+  fontWeight: 800,
+  cursor: "pointer",
+  fontSize: "0.82rem",
+};
+
+const selectedVisitButtonActiveStyle: CSSProperties = {
+  ...selectedVisitButtonStyle,
+  background: "#dcfce7",
+  border: "1px solid #86efac",
+  color: "#166534",
 };
 
 const gridListStyle: CSSProperties = {
