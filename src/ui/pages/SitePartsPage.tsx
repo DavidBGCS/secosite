@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 
-import type { SiteFile } from "../../core";
+import type { SiteFile, VisitRecord } from "../../core";
 import { useFirestoreSite } from "../../app/state/useFirestoreSite";
 
 import { AppLayout } from "../layouts/AppLayout";
@@ -33,6 +33,17 @@ type SiteFileWithParts = SiteFile & {
   partActions?: PartActionRecord[];
 };
 
+type TotalsRow = {
+  key: string;
+  title: string;
+  discipline: PartDiscipline;
+  manufacturer?: string;
+  partCode?: string;
+  category?: string;
+  locationText?: string;
+  quantity: number;
+};
+
 const DISCIPLINE_LABELS: Record<PartDiscipline | "all", string> = {
   all: "All",
   "fire-alarm": "Fire Alarm",
@@ -42,12 +53,83 @@ const DISCIPLINE_LABELS: Record<PartDiscipline | "all", string> = {
   "emergency-lighting": "Emergency Lighting",
 };
 
-function sortInstalledParts(parts: InstalledPartRecord[]) {
-  return [...parts].sort((a, b) => {
-    const aTitle = `${a.discipline} ${a.title} ${a.locationText ?? ""}`.toLowerCase();
-    const bTitle = `${b.discipline} ${b.title} ${b.locationText ?? ""}`.toLowerCase();
-    return aTitle.localeCompare(bTitle);
-  });
+function makeId(prefix = "id"): string {
+  if (globalThis.crypto?.randomUUID) {
+    return `${prefix}-${globalThis.crypto.randomUUID()}`;
+  }
+
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function getVisitDateLabel(visit: VisitRecord, fallbackIndex: number) {
+  const rawDate =
+    visit.startedAt ||
+    visit.updatedAt ||
+    visit.createdAt ||
+    new Date().toISOString();
+
+  const date = new Date(rawDate);
+
+  if (Number.isNaN(date.getTime())) {
+    return `Visit ${fallbackIndex + 1}`;
+  }
+
+  return `Visit ${fallbackIndex + 1} — ${date.toLocaleDateString("en-IE")}`;
+}
+
+function getVisitSortValue(visit: VisitRecord) {
+  return visit.startedAt || visit.updatedAt || visit.createdAt || "";
+}
+
+function actionQuantityDelta(action: PartActionRecord) {
+  if (action.actionType === "remove" || action.actionType === "return") {
+    return -Math.abs(action.quantity ?? 0);
+  }
+
+  return Math.abs(action.quantity ?? 0);
+}
+
+function buildTotalKey(action: PartActionRecord) {
+  return [
+    action.discipline,
+    action.title?.trim().toLowerCase(),
+    action.manufacturer?.trim().toLowerCase() ?? "",
+    action.partCode?.trim().toLowerCase() ?? "",
+    action.category?.trim().toLowerCase() ?? "",
+    action.locationText?.trim().toLowerCase() ?? "",
+  ].join("|");
+}
+
+function actionMatchesSearch(action: PartActionRecord, search: string) {
+  const q = search.trim().toLowerCase();
+  if (!q) return true;
+
+  return [
+    action.title,
+    action.manufacturer,
+    action.partCode,
+    action.category,
+    action.locationText,
+    action.linkedAssetReference,
+    action.discipline,
+    action.note,
+    action.engineerName,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .includes(q);
+}
+
+function actionMatchesDiscipline(
+  action: PartActionRecord,
+  selectedDiscipline: PartDiscipline | "all"
+) {
+  return selectedDiscipline === "all" || action.discipline === selectedDiscipline;
 }
 
 export function SitePartsPage() {
@@ -60,113 +142,113 @@ export function SitePartsPage() {
   const [selectedDiscipline, setSelectedDiscipline] =
     useState<PartDiscipline | "all">("all");
   const [showAddModal, setShowAddModal] = useState(false);
+  const [selectedVisitId, setSelectedVisitId] = useState<string | undefined>();
 
-  const activeVisit = useMemo(() => {
-    if (!siteFile) return undefined;
+  const visits = useMemo(() => {
+    if (!typedSiteFile?.visits) return [];
 
-    return [...siteFile.visits]
-      .filter((visit) => visit.status === "draft" || visit.status === "in-progress")
-      .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))[0];
-  }, [siteFile]);
-
-  const installedParts = useMemo(() => {
-    if (!typedSiteFile) return [];
-
-    const raw = typedSiteFile.installedParts ?? [];
-    const q = search.trim().toLowerCase();
-
-    return sortInstalledParts(
-      raw.filter((part) => {
-        const disciplineMatch =
-          selectedDiscipline === "all" || part.discipline === selectedDiscipline;
-
-        const searchMatch =
-          !q ||
-          [
-            part.title,
-            part.manufacturer,
-            part.partCode,
-            part.category,
-            part.locationText,
-            part.linkedAssetReference,
-            part.discipline,
-            part.notes,
-          ]
-            .filter(Boolean)
-            .join(" ")
-            .toLowerCase()
-            .includes(q);
-
-        return disciplineMatch && searchMatch;
-      })
+    return [...typedSiteFile.visits].sort((a, b) =>
+      getVisitSortValue(a).localeCompare(getVisitSortValue(b))
     );
-  }, [typedSiteFile, search, selectedDiscipline]);
+  }, [typedSiteFile?.visits]);
 
-  const totalInstalledQuantity = useMemo(() => {
-    return (typedSiteFile?.installedParts ?? []).reduce(
-      (sum, part) => sum + (part.quantity ?? 0),
-      0
-    );
-  }, [typedSiteFile]);
+  const selectedVisit = useMemo(() => {
+    if (!visits.length) return undefined;
 
-  const handleEditPart = async (part: InstalledPartRecord) => {
-    if (!typedSiteFile) return;
-
-    const newTitle = window.prompt("Part name:", part.title ?? "");
-    if (newTitle === null) return;
-
-    const newQtyInput = window.prompt("Quantity:", String(part.quantity ?? 1));
-    if (newQtyInput === null) return;
-
-    const newQty = Number(newQtyInput);
-
-    if (!Number.isFinite(newQty) || newQty < 0) {
-      window.alert("Please enter a valid quantity.");
-      return;
+    if (selectedVisitId) {
+      const found = visits.find((visit) => visit.id === selectedVisitId);
+      if (found) return found;
     }
 
-    const newLocation = window.prompt("Location:", part.locationText ?? "");
-    if (newLocation === null) return;
+    return visits[visits.length - 1];
+  }, [selectedVisitId, visits]);
 
-    const newNotes = window.prompt("Notes:", part.notes ?? "");
-    if (newNotes === null) return;
+  const filteredActions = useMemo(() => {
+    const actions = typedSiteFile?.partActions ?? [];
 
-    const updatedParts = (typedSiteFile.installedParts ?? []).map((existingPart) =>
-      existingPart.id === part.id
-        ? {
-            ...existingPart,
-            title: newTitle.trim(),
-            quantity: newQty,
-            locationText: newLocation.trim(),
-            notes: newNotes.trim(),
-            updatedAt: new Date().toISOString(),
-          }
-        : existingPart
-    );
+    return actions
+      .filter((action) => actionMatchesDiscipline(action, selectedDiscipline))
+      .filter((action) => actionMatchesSearch(action, search))
+      .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+  }, [typedSiteFile?.partActions, selectedDiscipline, search]);
 
-    await updateSite({
-      ...typedSiteFile,
-      installedParts: updatedParts,
-    });
-  };
+  const actionsByVisitId = useMemo(() => {
+    const map = new Map<string, PartActionRecord[]>();
 
-  const handleDeletePart = async (part: InstalledPartRecord) => {
+    for (const action of filteredActions) {
+      const visitId = action.visitId || "no-active-visit";
+      const existing = map.get(visitId) ?? [];
+      existing.push(action);
+      map.set(visitId, existing);
+    }
+
+    return map;
+  }, [filteredActions]);
+
+  const totals = useMemo(() => {
+    const totalsMap = new Map<string, TotalsRow>();
+
+    for (const action of filteredActions) {
+      const key = buildTotalKey(action);
+      const existing = totalsMap.get(key);
+
+      if (existing) {
+        existing.quantity += actionQuantityDelta(action);
+      } else {
+        totalsMap.set(key, {
+          key,
+          title: action.title,
+          discipline: action.discipline,
+          manufacturer: action.manufacturer,
+          partCode: action.partCode,
+          category: action.category,
+          locationText: action.locationText,
+          quantity: actionQuantityDelta(action),
+        });
+      }
+    }
+
+    return [...totalsMap.values()]
+      .filter((row) => row.quantity !== 0)
+      .sort((a, b) => a.title.localeCompare(b.title));
+  }, [filteredActions]);
+
+  const totalInstalledQuantity = useMemo(() => {
+    return totals.reduce((sum, row) => sum + Math.max(0, row.quantity), 0);
+  }, [totals]);
+
+  const handleAddVisit = async () => {
     if (!typedSiteFile) return;
 
-    const confirmed = window.confirm(
-      `Delete this part?\n\n${part.title} x${part.quantity}`
-    );
+    const now = nowIso();
+    const nextVisitNumber = (typedSiteFile.visits?.length ?? 0) + 1;
 
-    if (!confirmed) return;
+    const newVisit = {
+      id: makeId("visit"),
+      visitType: `Visit ${nextVisitNumber}`,
+      engineerName: "Site Team",
+      status: "in-progress",
+      startedAt: now,
+      updatedAt: now,
+      notes: "",
+    } as unknown as VisitRecord;
 
-    const updatedParts = (typedSiteFile.installedParts ?? []).filter(
-      (existingPart) => existingPart.id !== part.id
-    );
-
-    await updateSite({
+    const next: SiteFileWithParts = {
       ...typedSiteFile,
-      installedParts: updatedParts,
-    });
+      visits: [...(typedSiteFile.visits ?? []), newVisit],
+      metadata: {
+        ...typedSiteFile.metadata,
+        updatedAt: now,
+      },
+    };
+
+    await updateSite(next);
+    setSelectedVisitId(newVisit.id);
+  };
+
+  const openAddPartForVisit = (visitId: string) => {
+    setSelectedVisitId(visitId);
+    setShowAddModal(true);
   };
 
   if (loading) {
@@ -198,16 +280,16 @@ export function SitePartsPage() {
 
   return (
     <AppLayout
-      title="Installed Parts"
+      title="Site Parts"
       subtitle={`${typedSiteFile.site.name} • ${
         typedSiteFile.site.siteCode ?? typedSiteFile.site.id
       }`}
       sessionStatus={{
-        isVisitActive: !!activeVisit,
-        visitLabel: activeVisit?.visitType,
-        engineerName: activeVisit?.engineerName,
-        startedAt: activeVisit?.startedAt,
-        serviceColumnLabel: activeVisit?.serviceColumnKey?.toUpperCase(),
+        isVisitActive: !!selectedVisit,
+        visitLabel: selectedVisit?.visitType,
+        engineerName: selectedVisit?.engineerName,
+        startedAt: selectedVisit?.startedAt,
+        serviceColumnLabel: selectedVisit?.serviceColumnKey?.toUpperCase(),
       }}
     >
       <div style={pageGridStyle}>
@@ -215,21 +297,18 @@ export function SitePartsPage() {
           <div style={heroWrapStyle}>
             <div>
               <div style={eyebrowStyle}>SITE PARTS REGISTER</div>
-              <div style={heroTitleStyle}>Installed Parts & Activity</div>
+              <div style={heroTitleStyle}>Visits & Automatic Totals</div>
               <div style={heroSubStyle}>
-                Record fitted parts across fire, intruder, CCTV, access, and emergency
-                lighting without engineers overwriting each other.
+                Add parts into the correct visit. Totals are calculated automatically
+                from all visit entries.
               </div>
             </div>
 
             <div style={heroActionStackStyle}>
-              <div style={heroBadgeStyle}>{totalInstalledQuantity} Parts Installed</div>
+              <div style={heroBadgeStyle}>{totalInstalledQuantity} Total Parts</div>
 
-              <PrimaryButton
-                onClick={() => setShowAddModal(true)}
-                style={heroButtonStyle}
-              >
-                + Add Part
+              <PrimaryButton onClick={handleAddVisit} style={heroButtonStyle}>
+                + Add Visit
               </PrimaryButton>
             </div>
           </div>
@@ -238,41 +317,8 @@ export function SitePartsPage() {
         <PartsDashboard
           installedParts={typedSiteFile.installedParts ?? []}
           partActions={typedSiteFile.partActions ?? []}
-          activeVisitId={activeVisit?.id}
+          activeVisitId={selectedVisit?.id}
         />
-
-        {activeVisit ? (
-          <Card>
-            <CardTitle>Live Visit Link</CardTitle>
-            <div style={liveVisitBannerStyle}>
-              <div>
-                <div style={liveVisitTitleStyle}>
-                  {activeVisit.visitType}
-                  {activeVisit.serviceColumnKey
-                    ? ` • ${activeVisit.serviceColumnKey.toUpperCase()}`
-                    : ""}
-                </div>
-                <div style={liveVisitMetaStyle}>
-                  {activeVisit.engineerName || "No engineer"} •{" "}
-                  {activeVisit.startedAt
-                    ? formatIrishDateTime(activeVisit.startedAt)
-                    : "No start time"}
-                </div>
-              </div>
-
-              <SecondaryButton
-                onClick={() =>
-                  navigate(
-                    `/site/${typedSiteFile.metadata.siteFileId}/visit/${activeVisit.id}`,
-                    { state: { visit: activeVisit } }
-                  )
-                }
-              >
-                Open Live Visit
-              </SecondaryButton>
-            </div>
-          </Card>
-        ) : null}
 
         <Card>
           <CardTitle>Controls</CardTitle>
@@ -283,7 +329,7 @@ export function SitePartsPage() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 style={inputStyle}
-                placeholder="Part, manufacturer, code, location, asset ref..."
+                placeholder="Part, manufacturer, code, location, engineer..."
               />
             </Field>
 
@@ -306,17 +352,13 @@ export function SitePartsPage() {
             </Field>
 
             <div style={actionsRowStyle}>
-              <PrimaryButton onClick={() => setShowAddModal(true)}>
-                Add Part Action
-              </PrimaryButton>
+              <PrimaryButton onClick={handleAddVisit}>Add Visit</PrimaryButton>
 
-              <SecondaryButton
-                onClick={() =>
-                  navigate(`/site/${typedSiteFile.metadata.siteFileId}/parts/history`)
-                }
-              >
-                View History
-              </SecondaryButton>
+              {selectedVisit ? (
+                <PrimaryButton onClick={() => openAddPartForVisit(selectedVisit.id)}>
+                  Add Part to Current Visit
+                </PrimaryButton>
+              ) : null}
 
               <SecondaryButton
                 onClick={() =>
@@ -330,77 +372,132 @@ export function SitePartsPage() {
         </Card>
 
         <Card>
-          <CardTitle>Installed Parts Register</CardTitle>
+          <CardTitle>Visits</CardTitle>
 
-          {installedParts.length === 0 ? (
-            <p style={emptyTextStyle}>No installed parts recorded yet.</p>
+          {visits.length === 0 ? (
+            <div style={emptyVisitStyle}>
+              <p style={emptyTextStyle}>No visits have been created yet.</p>
+              <PrimaryButton onClick={handleAddVisit}>Create Visit 1</PrimaryButton>
+            </div>
           ) : (
             <div style={gridListStyle}>
-              {installedParts.map((part) => (
-                <div key={part.id} style={itemCardStyle}>
-                  <div style={itemTopStyle}>
+              {visits.map((visit, index) => {
+                const visitActions = actionsByVisitId.get(visit.id) ?? [];
+                const visitTitle = getVisitDateLabel(visit, index);
+
+                return (
+                  <div key={visit.id} style={visitCardStyle}>
+                    <div style={visitHeaderStyle}>
+                      <div>
+                        <div style={visitTitleStyle}>{visitTitle}</div>
+                        <div style={visitMetaStyle}>
+                          {visit.engineerName || "Site Team"} •{" "}
+                          {visit.startedAt
+                            ? formatIrishDateTime(visit.startedAt)
+                            : "No start time"}
+                        </div>
+                      </div>
+
+                      <PrimaryButton onClick={() => openAddPartForVisit(visit.id)}>
+                        + Add Part
+                      </PrimaryButton>
+                    </div>
+
+                    {visitActions.length === 0 ? (
+                      <p style={emptyTextStyle}>No parts added to this visit yet.</p>
+                    ) : (
+                      <div style={visitActionListStyle}>
+                        {visitActions.map((action) => (
+                          <div key={action.id} style={actionRowStyle}>
+                            <div>
+                              <div style={actionTitleStyle}>
+                                {action.title} x{action.quantity}
+                              </div>
+                              <div style={actionMetaStyle}>
+                                {DISCIPLINE_LABELS[action.discipline]} •{" "}
+                                {action.engineerName || "Unknown engineer"} •{" "}
+                                {action.createdAt
+                                  ? formatIrishDateTime(action.createdAt)
+                                  : "No time"}
+                              </div>
+
+                              <div style={actionDetailStyle}>
+                                {action.locationText ? (
+                                  <span>Location: {action.locationText}</span>
+                                ) : null}
+                                {action.manufacturer ? (
+                                  <span>Manufacturer: {action.manufacturer}</span>
+                                ) : null}
+                                {action.partCode ? (
+                                  <span>Code: {action.partCode}</span>
+                                ) : null}
+                                {action.note ? <span>Note: {action.note}</span> : null}
+                              </div>
+                            </div>
+
+                            <span style={actionTypePillStyle}>{action.actionType}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {actionsByVisitId.get("no-active-visit")?.length ? (
+                <div style={visitCardStyle}>
+                  <div style={visitHeaderStyle}>
                     <div>
-                      <div style={itemTitleStyle}>{part.title}</div>
-                      <div style={itemMetaStyle}>
-                        {DISCIPLINE_LABELS[part.discipline]} • Qty {part.quantity}
+                      <div style={visitTitleStyle}>Unassigned Parts</div>
+                      <div style={visitMetaStyle}>
+                        Parts added before visit tracking was enabled.
                       </div>
                     </div>
-
-                    <span
-                      style={{
-                        ...pillStyle,
-                        background:
-                          part.status === "installed"
-                            ? "#dcfce7"
-                            : part.status === "temporary"
-                              ? "#fef3c7"
-                              : "#f3f4f6",
-                        color:
-                          part.status === "installed"
-                            ? "#166534"
-                            : part.status === "temporary"
-                              ? "#92400e"
-                              : "#374151",
-                      }}
-                    >
-                      {part.status}
-                    </span>
                   </div>
 
-                  <div style={detailGridStyle}>
-                    <div>
-                      <strong>Manufacturer:</strong> {part.manufacturer ?? "—"}
-                    </div>
-                    <div>
-                      <strong>Part Code:</strong> {part.partCode ?? "—"}
-                    </div>
-                    <div>
-                      <strong>Category:</strong> {part.category ?? "—"}
-                    </div>
-                    <div>
-                      <strong>Asset Ref:</strong> {part.linkedAssetReference ?? "—"}
-                    </div>
-                    <div style={{ gridColumn: "1 / -1" }}>
-                      <strong>Location:</strong> {part.locationText ?? "—"}
-                    </div>
-                    <div style={{ gridColumn: "1 / -1" }}>
-                      <strong>Notes:</strong> {part.notes ?? "—"}
+                  <div style={visitActionListStyle}>
+                    {(actionsByVisitId.get("no-active-visit") ?? []).map((action) => (
+                      <div key={action.id} style={actionRowStyle}>
+                        <div>
+                          <div style={actionTitleStyle}>
+                            {action.title} x{action.quantity}
+                          </div>
+                          <div style={actionMetaStyle}>
+                            {DISCIPLINE_LABELS[action.discipline]} •{" "}
+                            {action.engineerName || "Unknown engineer"}
+                          </div>
+                        </div>
+
+                        <span style={actionTypePillStyle}>{action.actionType}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          )}
+        </Card>
+
+        <Card>
+          <CardTitle>Automatic Totals</CardTitle>
+
+          {totals.length === 0 ? (
+            <p style={emptyTextStyle}>No totals yet. Add parts to a visit first.</p>
+          ) : (
+            <div style={totalsListStyle}>
+              {totals.map((row) => (
+                <div key={row.key} style={totalRowStyle}>
+                  <div>
+                    <div style={totalTitleStyle}>{row.title}</div>
+                    <div style={totalMetaStyle}>
+                      {DISCIPLINE_LABELS[row.discipline]}
+                      {row.manufacturer ? ` • ${row.manufacturer}` : ""}
+                      {row.partCode ? ` • ${row.partCode}` : ""}
+                      {row.locationText ? ` • ${row.locationText}` : ""}
                     </div>
                   </div>
 
-                  <div style={partButtonRowStyle}>
-                    <SecondaryButton onClick={() => handleEditPart(part)}>
-                      Edit
-                    </SecondaryButton>
-
-                    <button
-                      type="button"
-                      onClick={() => handleDeletePart(part)}
-                      style={deleteButtonStyle}
-                    >
-                      Delete
-                    </button>
-                  </div>
+                  <div style={totalQtyStyle}>x{row.quantity}</div>
                 </div>
               ))}
             </div>
@@ -408,10 +505,10 @@ export function SitePartsPage() {
         </Card>
       </div>
 
-      {showAddModal ? (
+      {showAddModal && selectedVisit ? (
         <AddPartActionModal
           siteFile={typedSiteFile}
-          activeVisit={activeVisit}
+          activeVisit={selectedVisit}
           updateSite={updateSite}
           onClose={() => setShowAddModal(false)}
           onSaved={() => setShowAddModal(false)}
@@ -495,29 +592,6 @@ const heroBadgeStyle: CSSProperties = {
   whiteSpace: "nowrap",
 };
 
-const liveVisitBannerStyle: CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: "12px",
-  padding: "14px",
-  borderRadius: "18px",
-  background: "linear-gradient(180deg, #ecfdf5 0%, #dcfce7 100%)",
-  border: "1px solid #86efac",
-};
-
-const liveVisitTitleStyle: CSSProperties = {
-  fontWeight: 900,
-  color: "#166534",
-  fontSize: "1rem",
-};
-
-const liveVisitMetaStyle: CSSProperties = {
-  marginTop: "4px",
-  color: "#15803d",
-  fontSize: "0.92rem",
-};
-
 const controlsGridStyle: CSSProperties = {
   display: "grid",
   gap: "12px",
@@ -557,7 +631,12 @@ const gridListStyle: CSSProperties = {
   gap: "12px",
 };
 
-const itemCardStyle: CSSProperties = {
+const emptyVisitStyle: CSSProperties = {
+  display: "grid",
+  gap: "12px",
+};
+
+const visitCardStyle: CSSProperties = {
   border: "1px solid #e5e7eb",
   borderRadius: "18px",
   padding: "14px",
@@ -566,58 +645,104 @@ const itemCardStyle: CSSProperties = {
   gap: "12px",
 };
 
-const itemTopStyle: CSSProperties = {
+const visitHeaderStyle: CSSProperties = {
   display: "flex",
   justifyContent: "space-between",
-  alignItems: "start",
-  gap: "10px",
+  gap: "12px",
+  alignItems: "center",
 };
 
-const itemTitleStyle: CSSProperties = {
-  fontSize: "1rem",
+const visitTitleStyle: CSSProperties = {
+  fontSize: "1.05rem",
   fontWeight: 900,
   color: "#111827",
 };
 
-const itemMetaStyle: CSSProperties = {
+const visitMetaStyle: CSSProperties = {
   marginTop: "4px",
-  color: "#6b7280",
+  color: "#64748b",
   fontWeight: 700,
-  fontSize: "0.92rem",
+  fontSize: "0.9rem",
 };
 
-const detailGridStyle: CSSProperties = {
+const visitActionListStyle: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "1fr 1fr",
-  gap: "8px 12px",
-  color: "#374151",
-  fontSize: "0.92rem",
-};
-
-const partButtonRowStyle: CSSProperties = {
-  display: "flex",
   gap: "8px",
-  justifyContent: "flex-end",
-  borderTop: "1px solid #e5e7eb",
-  paddingTop: "10px",
 };
 
-const deleteButtonStyle: CSSProperties = {
-  border: "1px solid #fecaca",
-  background: "#fee2e2",
-  color: "#991b1b",
-  borderRadius: "12px",
-  padding: "10px 14px",
+const actionRowStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: "10px",
+  padding: "12px",
+  borderRadius: "14px",
+  background: "#ffffff",
+  border: "1px solid #e5e7eb",
+};
+
+const actionTitleStyle: CSSProperties = {
   fontWeight: 900,
-  cursor: "pointer",
+  color: "#111827",
 };
 
-const pillStyle: CSSProperties = {
+const actionMetaStyle: CSSProperties = {
+  marginTop: "4px",
+  color: "#64748b",
+  fontSize: "0.86rem",
+  fontWeight: 700,
+};
+
+const actionDetailStyle: CSSProperties = {
+  marginTop: "6px",
+  display: "grid",
+  gap: "3px",
+  color: "#475569",
+  fontSize: "0.84rem",
+};
+
+const actionTypePillStyle: CSSProperties = {
+  height: "fit-content",
   borderRadius: "999px",
   padding: "6px 10px",
-  fontSize: "0.76rem",
+  background: "#eef2ff",
+  color: "#3730a3",
+  fontSize: "0.75rem",
   fontWeight: 900,
   whiteSpace: "nowrap",
+};
+
+const totalsListStyle: CSSProperties = {
+  display: "grid",
+  gap: "8px",
+};
+
+const totalRowStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: "12px",
+  alignItems: "center",
+  padding: "12px",
+  borderRadius: "14px",
+  border: "1px solid #e5e7eb",
+  background: "#ffffff",
+};
+
+const totalTitleStyle: CSSProperties = {
+  fontWeight: 900,
+  color: "#111827",
+};
+
+const totalMetaStyle: CSSProperties = {
+  marginTop: "4px",
+  color: "#64748b",
+  fontSize: "0.86rem",
+  fontWeight: 700,
+};
+
+const totalQtyStyle: CSSProperties = {
+  fontWeight: 900,
+  fontSize: "1.2rem",
+  color: "#111827",
 };
 
 const emptyTextStyle: CSSProperties = {
