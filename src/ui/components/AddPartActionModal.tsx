@@ -57,24 +57,6 @@ function getEngineerNameFromUser(
   return "";
 }
 
-function buildInstalledPartKey(input: {
-  discipline: PartDiscipline;
-  title: string;
-  manufacturer?: string;
-  partCode?: string;
-  locationText?: string;
-  linkedAssetReference?: string;
-}) {
-  return [
-    input.discipline.trim().toLowerCase(),
-    input.title.trim().toLowerCase(),
-    (input.manufacturer ?? "").trim().toLowerCase(),
-    (input.partCode ?? "").trim().toLowerCase(),
-    (input.locationText ?? "").trim().toLowerCase(),
-    (input.linkedAssetReference ?? "").trim().toLowerCase(),
-  ].join("|");
-}
-
 export function AddPartActionModal({
   siteFile,
   activeVisit,
@@ -116,6 +98,10 @@ export function AddPartActionModal({
     return PART_CATEGORY_OPTIONS[discipline] ?? ["other"];
   }, [discipline]);
 
+  const visitLabel = activeVisit
+    ? `${activeVisit.visitType}${activeVisit.serviceColumnKey ? ` • ${activeVisit.serviceColumnKey.toUpperCase()}` : ""}`
+    : "No active visit";
+
   const handleSave = async () => {
     const cleanTitle = title.trim();
     const cleanManufacturer = manufacturer.trim();
@@ -145,8 +131,8 @@ export function AddPartActionModal({
       setMessages([]);
 
       const next: SiteFileWithParts = JSON.parse(JSON.stringify(siteFile));
-      next.installedParts = next.installedParts ?? [];
       next.partActions = next.partActions ?? [];
+      next.installedParts = next.installedParts ?? [];
 
       const actionId = makeId("part-action");
       const now = nowIso();
@@ -154,7 +140,7 @@ export function AddPartActionModal({
       const action: PartActionRecord = {
         id: actionId,
         siteId: siteFile.site.id,
-        visitId: activeVisit?.id,
+        visitId: activeVisit?.id ?? "no-active-visit",
         discipline,
         actionType,
         engineerName,
@@ -172,72 +158,10 @@ export function AddPartActionModal({
         createdAt: now,
       };
 
+      // Append-only log.
+      // Do not merge/update installedParts here.
+      // Totals should be calculated later from partActions.
       next.partActions.unshift(action);
-
-      const installedKey = buildInstalledPartKey({
-        discipline,
-        title: cleanTitle,
-        manufacturer: cleanManufacturer,
-        partCode: cleanPartCode,
-        locationText: cleanLocation,
-        linkedAssetReference: cleanLinkedRef,
-      });
-
-      const existingInstalled = next.installedParts.find((item) => {
-        const itemKey = buildInstalledPartKey({
-          discipline: item.discipline,
-          title: item.title,
-          manufacturer: item.manufacturer,
-          partCode: item.partCode,
-          locationText: item.locationText,
-          linkedAssetReference: item.linkedAssetReference,
-        });
-        return itemKey === installedKey;
-      });
-
-      const delta =
-        actionType === "remove" || actionType === "return"
-          ? -parsedQuantity
-          : parsedQuantity;
-
-      if (existingInstalled) {
-        existingInstalled.quantity = Math.max(0, existingInstalled.quantity + delta);
-        existingInstalled.status =
-          actionType === "temporary-add"
-            ? "temporary"
-            : existingInstalled.quantity <= 0
-              ? "removed"
-              : "installed";
-        existingInstalled.notes = cleanNote || existingInstalled.notes;
-        existingInstalled.lastActionId = actionId;
-        existingInstalled.updatedAt = now;
-      } else {
-        const initialQuantity = Math.max(0, delta);
-
-        next.installedParts.unshift({
-          id: makeId("installed-part"),
-          siteId: siteFile.site.id,
-          discipline,
-          title: cleanTitle,
-          manufacturer: cleanManufacturer || undefined,
-          partCode: cleanPartCode || undefined,
-          category: category || undefined,
-          quantity: initialQuantity,
-          locationText: cleanLocation || undefined,
-          linkedAssetId: linkedAsset?.id,
-          linkedAssetReference: cleanLinkedRef || undefined,
-          status:
-            actionType === "temporary-add"
-              ? "temporary"
-              : initialQuantity <= 0
-                ? "removed"
-                : "installed",
-          notes: cleanNote || undefined,
-          createdAt: now,
-          updatedAt: now,
-          lastActionId: actionId,
-        });
-      }
 
       next.metadata.updatedAt = now;
 
@@ -263,6 +187,7 @@ export function AddPartActionModal({
           <div>
             <div style={kickerStyle}>SITE PARTS</div>
             <CardTitle>Add Part Action</CardTitle>
+            <div style={visitLabelStyle}>{visitLabel}</div>
           </div>
 
           <button type="button" onClick={onClose} style={closeButtonStyle}>
@@ -490,6 +415,7 @@ const modalStyle: React.CSSProperties = {
   overflow: "auto",
   borderRadius: "24px",
   background: "#ffffff",
+  color: "#111827",
   boxShadow: "0 28px 60px rgba(2,6,23,0.32)",
   display: "grid",
   gap: "16px",
@@ -509,6 +435,13 @@ const kickerStyle: React.CSSProperties = {
   letterSpacing: "0.1em",
   color: "#475569",
   marginBottom: "6px",
+};
+
+const visitLabelStyle: React.CSSProperties = {
+  marginTop: "6px",
+  color: "#64748b",
+  fontWeight: 700,
+  fontSize: "0.9rem",
 };
 
 const closeButtonStyle: React.CSSProperties = {
