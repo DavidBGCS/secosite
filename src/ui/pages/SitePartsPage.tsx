@@ -1,6 +1,6 @@
 // src/ui/pages/SitePartsPage.tsx
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -143,6 +143,10 @@ export function SitePartsPage() {
     useState<PartDiscipline | "all">("all");
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedVisitId, setSelectedVisitId] = useState<string | undefined>();
+  const [highlightVisitId, setHighlightVisitId] = useState<string | undefined>();
+  const [message, setMessage] = useState<string>("");
+
+  const visitRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const visits = useMemo(() => {
     if (!typedSiteFile?.visits) return [];
@@ -172,6 +176,19 @@ export function SitePartsPage() {
       .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
   }, [typedSiteFile?.partActions, selectedDiscipline, search]);
 
+  const allActionsByVisitId = useMemo(() => {
+    const map = new Map<string, PartActionRecord[]>();
+
+    for (const action of typedSiteFile?.partActions ?? []) {
+      const visitId = action.visitId || "no-active-visit";
+      const existing = map.get(visitId) ?? [];
+      existing.push(action);
+      map.set(visitId, existing);
+    }
+
+    return map;
+  }, [typedSiteFile?.partActions]);
+
   const actionsByVisitId = useMemo(() => {
     const map = new Map<string, PartActionRecord[]>();
 
@@ -184,6 +201,12 @@ export function SitePartsPage() {
 
     return map;
   }, [filteredActions]);
+
+  const hasEmptyLatestVisit = useMemo(() => {
+    if (!visits.length) return false;
+    const latestVisit = visits[visits.length - 1];
+    return (allActionsByVisitId.get(latestVisit.id) ?? []).length === 0;
+  }, [allActionsByVisitId, visits]);
 
   const totals = useMemo(() => {
     const totalsMap = new Map<string, TotalsRow>();
@@ -220,6 +243,24 @@ export function SitePartsPage() {
   const handleAddVisit = async () => {
     if (!typedSiteFile) return;
 
+    if (hasEmptyLatestVisit) {
+      const latestVisit = visits[visits.length - 1];
+
+      setSelectedVisitId(latestVisit.id);
+      setHighlightVisitId(latestVisit.id);
+      setMessage("You already have an empty visit. Add parts to it before creating another.");
+
+      setTimeout(() => {
+        visitRefs.current[latestVisit.id]?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+      }, 100);
+
+      setTimeout(() => setHighlightVisitId(undefined), 2500);
+      return;
+    }
+
     const now = nowIso();
     const nextVisitNumber = (typedSiteFile.visits?.length ?? 0) + 1;
 
@@ -243,7 +284,59 @@ export function SitePartsPage() {
     };
 
     await updateSite(next);
+
     setSelectedVisitId(newVisit.id);
+    setHighlightVisitId(newVisit.id);
+    setMessage(`Created Visit ${nextVisitNumber}. Add parts to this visit.`);
+
+    setTimeout(() => {
+      visitRefs.current[newVisit.id]?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }, 300);
+
+    setTimeout(() => setHighlightVisitId(undefined), 2500);
+  };
+
+  const handleDeleteVisit = async (visit: VisitRecord) => {
+    if (!typedSiteFile) return;
+
+    const visitActions = typedSiteFile.partActions?.filter(
+      (action) => action.visitId === visit.id
+    );
+
+    const confirmed = window.confirm(
+      visitActions?.length
+        ? "Delete this visit?\n\nParts assigned to this visit will become unassigned."
+        : "Delete this empty visit?"
+    );
+
+    if (!confirmed) return;
+
+    const updatedActions = (typedSiteFile.partActions ?? []).map((action) =>
+      action.visitId === visit.id ? { ...action, visitId: undefined } : action
+    );
+
+    const updatedVisits = (typedSiteFile.visits ?? []).filter(
+      (existingVisit) => existingVisit.id !== visit.id
+    );
+
+    await updateSite({
+      ...typedSiteFile,
+      visits: updatedVisits,
+      partActions: updatedActions,
+      metadata: {
+        ...typedSiteFile.metadata,
+        updatedAt: nowIso(),
+      },
+    });
+
+    if (selectedVisitId === visit.id) {
+      setSelectedVisitId(updatedVisits[updatedVisits.length - 1]?.id);
+    }
+
+    setMessage("Visit deleted.");
   };
 
   const openAddPartForVisit = (visitId: string) => {
@@ -312,6 +405,8 @@ export function SitePartsPage() {
               </PrimaryButton>
             </div>
           </div>
+
+          {message ? <div style={messageStyle}>{message}</div> : null}
         </Card>
 
         <PartsDashboard
@@ -384,9 +479,19 @@ export function SitePartsPage() {
               {visits.map((visit, index) => {
                 const visitActions = actionsByVisitId.get(visit.id) ?? [];
                 const visitTitle = getVisitDateLabel(visit, index);
+                const isHighlighted = highlightVisitId === visit.id;
 
                 return (
-                  <div key={visit.id} style={visitCardStyle}>
+                  <div
+                    key={visit.id}
+                    ref={(element) => {
+                      visitRefs.current[visit.id] = element;
+                    }}
+                    style={{
+                      ...visitCardStyle,
+                      ...(isHighlighted ? visitCardHighlightStyle : {}),
+                    }}
+                  >
                     <div style={visitHeaderStyle}>
                       <div>
                         <div style={visitTitleStyle}>{visitTitle}</div>
@@ -398,9 +503,19 @@ export function SitePartsPage() {
                         </div>
                       </div>
 
-                      <PrimaryButton onClick={() => openAddPartForVisit(visit.id)}>
-                        + Add Part
-                      </PrimaryButton>
+                      <div style={visitButtonStackStyle}>
+                        <PrimaryButton onClick={() => openAddPartForVisit(visit.id)}>
+                          + Add Part
+                        </PrimaryButton>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteVisit(visit)}
+                          style={visitDeleteButtonStyle}
+                        >
+                          Delete Visit
+                        </button>
+                      </div>
                     </div>
 
                     {visitActions.length === 0 ? (
@@ -592,6 +707,16 @@ const heroBadgeStyle: CSSProperties = {
   whiteSpace: "nowrap",
 };
 
+const messageStyle: CSSProperties = {
+  marginTop: "12px",
+  borderRadius: "14px",
+  padding: "10px 12px",
+  background: "#eff6ff",
+  border: "1px solid #bfdbfe",
+  color: "#1d4ed8",
+  fontWeight: 800,
+};
+
 const controlsGridStyle: CSSProperties = {
   display: "grid",
   gap: "12px",
@@ -643,6 +768,12 @@ const visitCardStyle: CSSProperties = {
   background: "#f8fafc",
   display: "grid",
   gap: "12px",
+  transition: "box-shadow 0.2s ease, border-color 0.2s ease",
+};
+
+const visitCardHighlightStyle: CSSProperties = {
+  border: "2px solid #2563eb",
+  boxShadow: "0 0 0 5px rgba(37,99,235,0.16)",
 };
 
 const visitHeaderStyle: CSSProperties = {
@@ -650,6 +781,23 @@ const visitHeaderStyle: CSSProperties = {
   justifyContent: "space-between",
   gap: "12px",
   alignItems: "center",
+};
+
+const visitButtonStackStyle: CSSProperties = {
+  display: "grid",
+  gap: "8px",
+  minWidth: "140px",
+};
+
+const visitDeleteButtonStyle: CSSProperties = {
+  border: "1px solid #fecaca",
+  background: "#fee2e2",
+  color: "#991b1b",
+  borderRadius: "12px",
+  padding: "9px 12px",
+  fontWeight: 900,
+  cursor: "pointer",
+  fontSize: "0.82rem",
 };
 
 const visitTitleStyle: CSSProperties = {
