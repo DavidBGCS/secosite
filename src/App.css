@@ -211,4 +211,44 @@ textarea::placeholder {
   color: #6b7280;
 }
 
+html,
+body,
+#root {
+  color-scheme: light !important;
+  background: #f5f7fb !important;
+  color: #111827 !important;
+}
+
+* {
+  color-scheme: light !important;
+}
+
+input,
+textarea,
+select {
+  background-color: #ffffff !important;
+  color: #111827 !important;
+  -webkit-text-fill-color: #111827 !important;
+  border-color: #cbd5e1 !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #64748b !important;
+  -webkit-text-fill-color: #64748b !important;
+}
+
+option {
+  background: #ffffff !important;
+  color: #111827 !important;
+}
+
+.card,
+.modal,
+dialog,
+form {
+  background-color: #ffffff !important;
+  color: #111827 !important;
+}
+
 }
