@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useAuth } from "../../app/context/AuthContext";
 import type { SiteFile, VisitRecord } from "../../core";
 import { cleanFirestoreData } from "../../utils/cleanFirestoreData";
+import { useStockItems } from "../../app/hooks/useStockItems";
 import {
   CardTitle,
   Field,
@@ -19,7 +20,6 @@ import type {
 } from "../../core/types/parts";
 import {
   PART_ACTION_OPTIONS,
-  PART_CATEGORY_OPTIONS,
   PART_DISCIPLINE_OPTIONS,
   PART_SOURCE_OPTIONS,
 } from "../../core/types/parts";
@@ -65,11 +65,17 @@ export function AddPartActionModal({
   onSaved,
 }: Props) {
   const { user } = useAuth();
+  const { items, loading: loadingStockItems } = useStockItems();
 
   const [discipline, setDiscipline] = useState<PartDiscipline>(
     (activeVisit?.discipline as PartDiscipline) ?? "fire-alarm"
   );
   const [actionType, setActionType] = useState<PartActionType>("add");
+
+  const [selectedCategory, setSelectedCategory] = useState("");
+  const [selectedSubcategory, setSelectedSubcategory] = useState("");
+  const [selectedItemId, setSelectedItemId] = useState("");
+
   const [title, setTitle] = useState("");
   const [manufacturer, setManufacturer] = useState("");
   const [partCode, setPartCode] = useState("");
@@ -81,6 +87,7 @@ export function AddPartActionModal({
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [messages, setMessages] = useState<string[]>([]);
+  const [manualMode, setManualMode] = useState(false);
 
   const engineerName = useMemo(() => {
     return activeVisit?.engineerName || getEngineerNameFromUser(user);
@@ -94,13 +101,70 @@ export function AddPartActionModal({
     );
   }, [siteFile.assets, linkedAssetReference]);
 
-  const categoryOptions = useMemo(() => {
-    return PART_CATEGORY_OPTIONS[discipline] ?? ["other"];
-  }, [discipline]);
+  const stockCategories = useMemo(() => {
+    return [
+      ...new Set(
+        items
+          .map((item) => item.category)
+          .filter((value): value is string => Boolean(value))
+      ),
+    ].sort();
+  }, [items]);
+
+  const stockSubcategories = useMemo(() => {
+    return [
+      ...new Set(
+        items
+          .filter((item) => item.category === selectedCategory)
+          .map((item) => item.subcategory)
+          .filter((value): value is string => Boolean(value))
+      ),
+    ].sort();
+  }, [items, selectedCategory]);
+
+  const filteredItems = useMemo(() => {
+    return items
+      .filter((item) => {
+        if (selectedCategory && item.category !== selectedCategory) return false;
+        if (selectedSubcategory && item.subcategory !== selectedSubcategory) return false;
+        return true;
+      })
+      .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+  }, [items, selectedCategory, selectedSubcategory]);
+
+  const selectedStockItem = useMemo(() => {
+    return items.find((item) => item.id === selectedItemId);
+  }, [items, selectedItemId]);
 
   const visitLabel = activeVisit
-    ? `${activeVisit.visitType}${activeVisit.serviceColumnKey ? ` • ${activeVisit.serviceColumnKey.toUpperCase()}` : ""}`
+    ? `${activeVisit.visitType}${
+        activeVisit.serviceColumnKey
+          ? ` • ${activeVisit.serviceColumnKey.toUpperCase()}`
+          : ""
+      }`
     : "No active visit";
+
+  const handleSelectStockItem = (id: string) => {
+    setSelectedItemId(id);
+
+    const selected = items.find((item) => item.id === id);
+    if (!selected) return;
+
+    setTitle(selected.name || "");
+    setManufacturer(selected.manufacturer || "");
+    setPartCode(selected.code || "");
+    setCategory(selected.category || "");
+    setDiscipline((selected.category || "").toLowerCase().includes("access")
+      ? "access-control"
+      : (selected.category || "").toLowerCase().includes("fire")
+        ? "fire-alarm"
+        : (selected.category || "").toLowerCase().includes("intruder")
+          ? "intruder-alarm"
+          : (selected.category || "").toLowerCase().includes("cctv")
+            ? "cctv"
+            : discipline
+    );
+  };
 
   const handleSave = async () => {
     const cleanTitle = title.trim();
@@ -113,6 +177,11 @@ export function AddPartActionModal({
 
     if (!engineerName) {
       setMessages(["Engineer name could not be determined from login."]);
+      return;
+    }
+
+    if (!manualMode && !selectedStockItem) {
+      setMessages(["Please select a stock item, or use Manual Part."]);
       return;
     }
 
@@ -137,7 +206,10 @@ export function AddPartActionModal({
       const actionId = makeId("part-action");
       const now = nowIso();
 
-      const action: PartActionRecord = {
+      const action: PartActionRecord & {
+        stockItemId?: string;
+        subcategory?: string;
+      } = {
         id: actionId,
         siteId: siteFile.site.id,
         visitId: activeVisit?.id ?? "no-active-visit",
@@ -145,10 +217,12 @@ export function AddPartActionModal({
         actionType,
         engineerName,
         engineerUserId: user?.uid,
+        stockItemId: selectedStockItem?.id,
         title: cleanTitle,
         manufacturer: cleanManufacturer || undefined,
         partCode: cleanPartCode || undefined,
-        category: category || undefined,
+        category: selectedStockItem?.category || category || undefined,
+        subcategory: selectedStockItem?.subcategory || selectedSubcategory || undefined,
         quantity: parsedQuantity,
         locationText: cleanLocation || undefined,
         linkedAssetId: linkedAsset?.id,
@@ -158,9 +232,6 @@ export function AddPartActionModal({
         createdAt: now,
       };
 
-      // Append-only log.
-      // Do not merge/update installedParts here.
-      // Totals should be calculated later from partActions.
       next.partActions.unshift(action);
 
       next.metadata.updatedAt = now;
@@ -196,23 +267,6 @@ export function AddPartActionModal({
         </div>
 
         <div style={contentStyle}>
-          <Field label="Discipline">
-            <select
-              value={discipline}
-              onChange={(e) => {
-                setDiscipline(e.target.value as PartDiscipline);
-                setCategory("");
-              }}
-              style={inputStyle}
-            >
-              {PART_DISCIPLINE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-
           <Field label="Action Type">
             <select
               value={actionType}
@@ -231,113 +285,204 @@ export function AddPartActionModal({
             <input value={engineerName} disabled style={inputStyle} />
           </Field>
 
-          <div style={twoColStyle}>
-            <Field label="Part Name">
-              <input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                style={inputStyle}
-                placeholder="Optical Detector / PIR / Camera / Reader..."
-              />
-            </Field>
+          <div style={manualToggleRowStyle}>
+            <button
+              type="button"
+              onClick={() => setManualMode(false)}
+              style={!manualMode ? toggleButtonActiveStyle : toggleButtonStyle}
+            >
+              Select From SeCoStock
+            </button>
 
-            <Field label="Quantity">
-              <div style={quantityWrapStyle}>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setQuantity((prev) =>
-                      String(Math.max(1, Number(prev || "1") - 1))
-                    )
-                  }
-                  style={qtyButtonStyle}
+            <button
+              type="button"
+              onClick={() => setManualMode(true)}
+              style={manualMode ? toggleButtonActiveStyle : toggleButtonStyle}
+            >
+              Manual Part
+            </button>
+          </div>
+
+          {!manualMode ? (
+            <>
+              <Field label="Category">
+                <select
+                  value={selectedCategory}
+                  onChange={(e) => {
+                    setSelectedCategory(e.target.value);
+                    setSelectedSubcategory("");
+                    setSelectedItemId("");
+                    setTitle("");
+                    setManufacturer("");
+                    setPartCode("");
+                    setCategory(e.target.value);
+                  }}
+                  style={inputStyle}
+                  disabled={loadingStockItems}
                 >
-                  −
-                </button>
+                  <option value="">
+                    {loadingStockItems ? "Loading stock..." : "Select category"}
+                  </option>
 
+                  {stockCategories.map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Subcategory">
+                <select
+                  value={selectedSubcategory}
+                  onChange={(e) => {
+                    setSelectedSubcategory(e.target.value);
+                    setSelectedItemId("");
+                    setTitle("");
+                    setManufacturer("");
+                    setPartCode("");
+                  }}
+                  style={inputStyle}
+                  disabled={!selectedCategory}
+                >
+                  <option value="">Select subcategory</option>
+
+                  {stockSubcategories.map((sub) => (
+                    <option key={sub} value={sub}>
+                      {sub}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Part">
+                <select
+                  value={selectedItemId}
+                  onChange={(e) => handleSelectStockItem(e.target.value)}
+                  style={inputStyle}
+                  disabled={!selectedCategory}
+                >
+                  <option value="">Select part</option>
+
+                  {filteredItems.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
+                      {item.code ? ` (${item.code})` : ""}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              {selectedStockItem ? (
+                <div style={selectedStockBoxStyle}>
+                  <strong>{selectedStockItem.name}</strong>
+                  <span>{selectedStockItem.manufacturer || "No manufacturer"}</span>
+                  <span>{selectedStockItem.code || "No code"}</span>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <Field label="Discipline">
+                <select
+                  value={discipline}
+                  onChange={(e) => setDiscipline(e.target.value as PartDiscipline)}
+                  style={inputStyle}
+                >
+                  {PART_DISCIPLINE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Part Name">
                 <input
-                  value={quantity}
-                  onChange={(e) => setQuantity(e.target.value.replace(/[^\d]/g, ""))}
-                  inputMode="numeric"
-                  style={{ ...inputStyle, textAlign: "center" }}
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  style={inputStyle}
+                  placeholder="Manual part name..."
                 />
+              </Field>
 
+              <div style={twoColStyle}>
+                <Field label="Manufacturer">
+                  <input
+                    value={manufacturer}
+                    onChange={(e) => setManufacturer(e.target.value)}
+                    style={inputStyle}
+                    placeholder="Manufacturer"
+                  />
+                </Field>
+
+                <Field label="Part Code">
+                  <input
+                    value={partCode}
+                    onChange={(e) => setPartCode(e.target.value)}
+                    style={inputStyle}
+                    placeholder="Part code"
+                  />
+                </Field>
+              </div>
+            </>
+          )}
+
+          <Field label="Quantity">
+            <div style={quantityWrapStyle}>
+              <button
+                type="button"
+                onClick={() =>
+                  setQuantity((prev) => String(Math.max(1, Number(prev || "1") - 1)))
+                }
+                style={qtyButtonStyle}
+              >
+                −
+              </button>
+
+              <input
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value.replace(/[^\d]/g, ""))}
+                inputMode="numeric"
+                style={{ ...inputStyle, textAlign: "center" }}
+              />
+
+              <button
+                type="button"
+                onClick={() => setQuantity((prev) => String(Number(prev || "0") + 1))}
+                style={qtyButtonStyle}
+              >
+                +
+              </button>
+            </div>
+
+            <div style={quickQtyStyle}>
+              {[1, 5, 10].map((value) => (
                 <button
+                  key={value}
                   type="button"
-                  onClick={() =>
-                    setQuantity((prev) => String(Number(prev || "0") + 1))
-                  }
-                  style={qtyButtonStyle}
+                  onClick={() => setQuantity(String(value))}
+                  style={quickQtyButtonStyle}
                 >
-                  +
+                  {value}
                 </button>
-              </div>
+              ))}
+            </div>
+          </Field>
 
-              <div style={quickQtyStyle}>
-                {[1, 5, 10].map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setQuantity(String(value))}
-                    style={quickQtyButtonStyle}
-                  >
-                    {value}
-                  </button>
-                ))}
-              </div>
-            </Field>
-          </div>
-
-          <div style={twoColStyle}>
-            <Field label="Category">
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                style={inputStyle}
-              >
-                <option value="">Select category</option>
-                {categoryOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <Field label="Source">
-              <select
-                value={sourceType}
-                onChange={(e) => setSourceType(e.target.value as PartSourceType)}
-                style={inputStyle}
-              >
-                {PART_SOURCE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </div>
-
-          <div style={twoColStyle}>
-            <Field label="Manufacturer">
-              <input
-                value={manufacturer}
-                onChange={(e) => setManufacturer(e.target.value)}
-                style={inputStyle}
-                placeholder="Manufacturer"
-              />
-            </Field>
-
-            <Field label="Part Code">
-              <input
-                value={partCode}
-                onChange={(e) => setPartCode(e.target.value)}
-                style={inputStyle}
-                placeholder="Part code"
-              />
-            </Field>
-          </div>
+          <Field label="Source">
+            <select
+              value={sourceType}
+              onChange={(e) => setSourceType(e.target.value as PartSourceType)}
+              style={inputStyle}
+            >
+              {PART_SOURCE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </Field>
 
           <div style={twoColStyle}>
             <Field label="Location">
@@ -465,6 +610,39 @@ const twoColStyle: React.CSSProperties = {
   display: "grid",
   gridTemplateColumns: "1fr 1fr",
   gap: "10px",
+};
+
+const manualToggleRowStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: "8px",
+};
+
+const toggleButtonStyle: React.CSSProperties = {
+  border: "1px solid #cbd5e1",
+  background: "#ffffff",
+  color: "#0f172a",
+  borderRadius: "12px",
+  padding: "11px 12px",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
+const toggleButtonActiveStyle: React.CSSProperties = {
+  ...toggleButtonStyle,
+  background: "#111827",
+  border: "1px solid #111827",
+  color: "#ffffff",
+};
+
+const selectedStockBoxStyle: React.CSSProperties = {
+  display: "grid",
+  gap: "4px",
+  padding: "12px",
+  borderRadius: "14px",
+  background: "#f8fafc",
+  border: "1px solid #e2e8f0",
+  color: "#111827",
 };
 
 const quantityWrapStyle: React.CSSProperties = {
