@@ -8,7 +8,7 @@ import {
   orderBy,
 } from "firebase/firestore";
 
-import { db } from "../../firebase";
+import { db } from "../../lib/firebase";
 
 export type StockItem = {
   id: string;
