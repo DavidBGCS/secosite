@@ -1,10 +1,12 @@
-// src/ui/components/AddPartActionModal.tsx
-
 import { useMemo, useState } from "react";
+
 import { useAuth } from "../../app/context/AuthContext";
 import type { SiteFile, VisitRecord } from "../../core";
 import { cleanFirestoreData } from "../../utils/cleanFirestoreData";
-import { useStockItems } from "../../app/hooks/useStockItems";
+import {
+  useStockItems,
+  type StockItem,
+} from "../../app/hooks/useStockItems";
 
 import {
   CardTitle,
@@ -58,7 +60,10 @@ function nowIso() {
 }
 
 function getEngineerNameFromUser(
-  user: { displayName?: string | null; email?: string | null } | null
+  user: {
+    displayName?: string | null;
+    email?: string | null;
+  } | null
 ): string {
   if (!user) return "";
 
@@ -73,6 +78,31 @@ function getEngineerNameFromUser(
   return "";
 }
 
+function normaliseCategory(value?: string) {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function getSuggestedSiteCategory(
+  item: StockItem,
+  discipline: PartDiscipline
+) {
+  const allowed =
+    PART_CATEGORY_OPTIONS[discipline] ?? ["other"];
+
+  const candidates = [
+    normaliseCategory(item.subcategory),
+    normaliseCategory(item.category),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (allowed.includes(candidate)) {
+      return candidate;
+    }
+  }
+
+  return "";
+}
+
 export function AddPartActionModal({
   siteFile,
   activeVisit,
@@ -81,23 +111,36 @@ export function AddPartActionModal({
   onSaved,
 }: Props) {
   const { user } = useAuth();
-  const { items } = useStockItems();
 
-  const [discipline, setDiscipline] = useState<PartDiscipline>(
-    (activeVisit?.discipline as PartDiscipline) ?? "fire-alarm"
-  );
+  const {
+    items,
+    loading: stockLoading,
+  } = useStockItems();
+
+  const [discipline, setDiscipline] =
+    useState<PartDiscipline>(
+      (activeVisit?.discipline as PartDiscipline) ??
+        "fire-alarm"
+    );
 
   const [actionType, setActionType] =
     useState<PartActionType>("add");
 
   const [title, setTitle] = useState("");
-  const [manufacturer, setManufacturer] = useState("");
+  const [manufacturer, setManufacturer] =
+    useState("");
   const [partCode, setPartCode] = useState("");
   const [category, setCategory] = useState("");
+
   const [quantity, setQuantity] = useState("1");
-  const [locationText, setLocationText] = useState("");
-  const [linkedAssetReference, setLinkedAssetReference] =
+
+  const [locationText, setLocationText] =
     useState("");
+
+  const [
+    linkedAssetReference,
+    setLinkedAssetReference,
+  ] = useState("");
 
   const [sourceType, setSourceType] =
     useState<PartSourceType>("van-stock");
@@ -106,74 +149,79 @@ export function AddPartActionModal({
 
   const [saving, setSaving] = useState(false);
 
-  const [messages, setMessages] = useState<string[]>([]);
+  const [messages, setMessages] =
+    useState<string[]>([]);
 
-  const [selectedCategory, setSelectedCategory] =
-    useState("");
-
-  const [selectedSubcategory, setSelectedSubcategory] =
+  const [catalogueSearch, setCatalogueSearch] =
     useState("");
 
   const [selectedItemId, setSelectedItemId] =
     useState("");
 
+  const [manualEntry, setManualEntry] =
+    useState(false);
+
+  const selectedStockItem = useMemo(() => {
+    if (!selectedItemId) return undefined;
+
+    return items.find(
+      (item) => item.id === selectedItemId
+    );
+  }, [items, selectedItemId]);
+
   const engineerName = useMemo(() => {
     return (
+      getEngineerNameFromUser(user) ||
       activeVisit?.engineerName ||
-      getEngineerNameFromUser(user)
+      "Site Team"
     );
-  }, [activeVisit?.engineerName, user]);
+  }, [user, activeVisit?.engineerName]);
 
   const linkedAsset = useMemo(() => {
-    const ref = linkedAssetReference.trim().toLowerCase();
+    const ref =
+      linkedAssetReference.trim().toLowerCase();
 
     if (!ref) return undefined;
 
     return siteFile.assets.find(
       (asset) =>
-        asset.reference?.trim().toLowerCase() === ref
+        asset.reference?.trim().toLowerCase() ===
+        ref
     );
   }, [siteFile.assets, linkedAssetReference]);
 
   const categoryOptions = useMemo(() => {
-    return PART_CATEGORY_OPTIONS[discipline] ?? ["other"];
+    return (
+      PART_CATEGORY_OPTIONS[discipline] ??
+      ["other"]
+    );
   }, [discipline]);
 
-  const stockCategories = useMemo(() => {
-    return [
-      ...new Set(
-        items
-          .map((i: any) => i.category)
-          .filter(Boolean)
-      ),
-    ].sort();
-  }, [items]);
+  const filteredCatalogueItems = useMemo(() => {
+    const q =
+      catalogueSearch.trim().toLowerCase();
 
-  const stockSubcategories = useMemo(() => {
-    return [
-      ...new Set(
-        items
-          .filter(
-            (i: any) =>
-              i.category === selectedCategory
-          )
-          .map((i: any) => i.subcategory)
-          .filter(Boolean)
-      ),
-    ].sort();
-  }, [items, selectedCategory]);
+    if (!q) {
+      return items.slice(0, 100);
+    }
 
-  const filteredItems = useMemo(() => {
-    return items.filter(
-      (i: any) =>
-        i.category === selectedCategory &&
-        i.subcategory === selectedSubcategory
-    );
-  }, [
-    items,
-    selectedCategory,
-    selectedSubcategory,
-  ]);
+    return items
+      .filter((item) => {
+        const text = [
+          item.name,
+          item.manufacturer,
+          item.code,
+          item.category,
+          item.subcategory,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return text.includes(q);
+      })
+      .slice(0, 100);
+  }, [items, catalogueSearch]);
 
   const visitLabel = activeVisit
     ? `${activeVisit.visitType}${
@@ -183,13 +231,90 @@ export function AddPartActionModal({
       }`
     : "No active visit";
 
+  const clearPartFields = () => {
+    setTitle("");
+    setManufacturer("");
+    setPartCode("");
+    setCategory("");
+  };
+
+  const handleSelectCatalogueItem = (
+    itemId: string
+  ) => {
+    setSelectedItemId(itemId);
+
+    const selected = items.find(
+      (item) => item.id === itemId
+    );
+
+    if (!selected) {
+      clearPartFields();
+      return;
+    }
+
+    setManualEntry(false);
+
+    setTitle(selected.name || "");
+
+    setManufacturer(
+      selected.manufacturer || ""
+    );
+
+    setPartCode(selected.code || "");
+
+    setCategory(
+      getSuggestedSiteCategory(
+        selected,
+        discipline
+      )
+    );
+  };
+
+  const handleManualEntry = () => {
+    setManualEntry(true);
+    setSelectedItemId("");
+    setCatalogueSearch("");
+    clearPartFields();
+    setMessages([]);
+  };
+
+  const handleReturnToCatalogue = () => {
+    setManualEntry(false);
+    setSelectedItemId("");
+    clearPartFields();
+    setMessages([]);
+  };
+
+  const handleDisciplineChange = (
+    nextDiscipline: PartDiscipline
+  ) => {
+    setDiscipline(nextDiscipline);
+    setCategory("");
+
+    if (selectedStockItem) {
+      setCategory(
+        getSuggestedSiteCategory(
+          selectedStockItem,
+          nextDiscipline
+        )
+      );
+    }
+  };
+
   const handleSave = async () => {
     const cleanTitle = title.trim();
-    const cleanManufacturer = manufacturer.trim();
+
+    const cleanManufacturer =
+      manufacturer.trim();
+
     const cleanPartCode = partCode.trim();
-    const cleanLocation = locationText.trim();
+
+    const cleanLocation =
+      locationText.trim();
+
     const cleanLinkedRef =
       linkedAssetReference.trim();
+
     const cleanNote = note.trim();
 
     const parsedQuantity = Number(quantity);
@@ -203,7 +328,12 @@ export function AddPartActionModal({
     }
 
     if (!cleanTitle) {
-      setMessages(["Part name is required."]);
+      setMessages([
+        manualEntry
+          ? "Part name is required."
+          : "Select a catalogue item or choose Part Not Listed.",
+      ]);
+
       return;
     }
 
@@ -222,39 +352,67 @@ export function AddPartActionModal({
       setSaving(true);
       setMessages([]);
 
-      const next: SiteFileWithParts = JSON.parse(
-        JSON.stringify(siteFile)
-      );
+      const next: SiteFileWithParts =
+        JSON.parse(JSON.stringify(siteFile));
 
       next.partActions =
         next.partActions ?? [];
 
-      const actionId = makeId("part-action");
+      const actionId =
+        makeId("part-action");
 
       const now = nowIso();
 
       const action: PartActionRecord = {
         id: actionId,
+
         siteId: siteFile.site.id,
+
         visitId:
-          activeVisit?.id ?? "no-active-visit",
+          activeVisit?.id ??
+          "no-active-visit",
+
         discipline,
         actionType,
+
         engineerName,
         engineerUserId: user?.uid,
+
+        catalogueItemId:
+          selectedItemId || undefined,
+
+        catalogueSource:
+          selectedItemId
+            ? "secostock"
+            : "manual",
+
         title: cleanTitle,
+
         manufacturer:
           cleanManufacturer || undefined,
-        partCode: cleanPartCode || undefined,
-        category: category || undefined,
+
+        partCode:
+          cleanPartCode || undefined,
+
+        category:
+          category || undefined,
+
         quantity: parsedQuantity,
+
         locationText:
           cleanLocation || undefined,
-        linkedAssetId: linkedAsset?.id,
+
+        linkedAssetId:
+          linkedAsset?.id,
+
         linkedAssetReference:
           cleanLinkedRef || undefined,
+
         sourceType,
-        note: cleanNote || undefined,
+
+        note:
+          cleanNote || undefined,
+
         createdAt: now,
       };
 
@@ -267,7 +425,6 @@ export function AddPartActionModal({
       );
 
       onSaved?.();
-
       onClose();
     } catch (saveError) {
       setMessages([
@@ -279,6 +436,9 @@ export function AddPartActionModal({
       setSaving(false);
     }
   };
+
+  const usingCatalogue =
+    !manualEntry;
 
   return (
     <div style={overlayStyle}>
@@ -311,13 +471,12 @@ export function AddPartActionModal({
           <Field label="Discipline">
             <select
               value={discipline}
-              onChange={(e) => {
-                setDiscipline(
-                  e.target.value as PartDiscipline
-                );
-
-                setCategory("");
-              }}
+              onChange={(e) =>
+                handleDisciplineChange(
+                  e.target
+                    .value as PartDiscipline
+                )
+              }
               style={inputStyle}
             >
               {PART_DISCIPLINE_OPTIONS.map(
@@ -333,12 +492,13 @@ export function AddPartActionModal({
             </select>
           </Field>
 
-          <Field label="Action Type">
+          <Field label="Action">
             <select
               value={actionType}
               onChange={(e) =>
                 setActionType(
-                  e.target.value as PartActionType
+                  e.target
+                    .value as PartActionType
                 )
               }
               style={inputStyle}
@@ -364,119 +524,156 @@ export function AddPartActionModal({
             />
           </Field>
 
-          <Field label="Select From SeCoStock">
-            <div style={twoColStyle}>
-              <select
-                value={selectedCategory}
-                onChange={(e) => {
-                  setSelectedCategory(
-                    e.target.value
-                  );
+          {usingCatalogue ? (
+            <div style={catalogueBoxStyle}>
+              <div style={catalogueHeaderStyle}>
+                <div>
+                  <div
+                    style={
+                      catalogueTitleStyle
+                    }
+                  >
+                    Select Part
+                  </div>
 
-                  setSelectedSubcategory("");
+                  <div
+                    style={
+                      catalogueSubStyle
+                    }
+                  >
+                    Search the SeCoStock
+                    catalogue by part name,
+                    manufacturer or part code.
+                  </div>
+                </div>
 
-                  setSelectedItemId("");
-                }}
-                style={inputStyle}
-              >
-                <option value="">
-                  Select category
-                </option>
-
-                {stockCategories.map(
-                  (category) => (
-                    <option
-                      key={category}
-                      value={category}
-                    >
-                      {category}
-                    </option>
-                  )
-                )}
-              </select>
-
-              <select
-                value={selectedSubcategory}
-                onChange={(e) => {
-                  setSelectedSubcategory(
-                    e.target.value
-                  );
-
-                  setSelectedItemId("");
-                }}
-                style={inputStyle}
-                disabled={!selectedCategory}
-              >
-                <option value="">
-                  Select subcategory
-                </option>
-
-                {stockSubcategories.map(
-                  (subcategory) => (
-                    <option
-                      key={subcategory}
-                      value={subcategory}
-                    >
-                      {subcategory}
-                    </option>
-                  )
-                )}
-              </select>
-            </div>
-
-            <select
-              value={selectedItemId}
-              onChange={(e) => {
-                const selected =
-                  filteredItems.find(
-                    (item: any) =>
-                      item.id === e.target.value
-                  );
-
-                setSelectedItemId(
-                  e.target.value
-                );
-
-                if (selected) {
-                  setTitle(
-                    selected.name || ""
-                  );
-
-                  setManufacturer(
-                    selected.manufacturer || ""
-                  );
-
-                  setPartCode(
-                    selected.code || ""
-                  );
-
-                  setCategory(
-                    selected.subcategory ||
-                      selected.category ||
-                      ""
-                  );
-                }
-              }}
-              style={{
-                ...inputStyle,
-                marginTop: "10px",
-              }}
-              disabled={!selectedSubcategory}
-            >
-              <option value="">
-                Select stock item
-              </option>
-
-              {filteredItems.map((item: any) => (
-                <option
-                  key={item.id}
-                  value={item.id}
+                <button
+                  type="button"
+                  onClick={handleManualEntry}
+                  style={textButtonStyle}
                 >
-                  {item.name}
+                  Part Not Listed
+                </button>
+              </div>
+
+              <input
+                value={catalogueSearch}
+                onChange={(e) =>
+                  setCatalogueSearch(
+                    e.target.value
+                  )
+                }
+                style={inputStyle}
+                placeholder="Search EMS, HKC, Deedlock, part number..."
+              />
+
+              <select
+                value={selectedItemId}
+                onChange={(e) =>
+                  handleSelectCatalogueItem(
+                    e.target.value
+                  )
+                }
+                style={{
+                  ...inputStyle,
+                  marginTop: "10px",
+                }}
+                disabled={stockLoading}
+              >
+                <option value="">
+                  {stockLoading
+                    ? "Loading catalogue..."
+                    : "Select catalogue item"}
                 </option>
-              ))}
-            </select>
-          </Field>
+
+                {filteredCatalogueItems.map(
+                  (item) => (
+                    <option
+                      key={item.id}
+                      value={item.id}
+                    >
+                      {[
+                        item.manufacturer,
+                        item.name,
+                        item.code
+                          ? `(${item.code})`
+                          : undefined,
+                      ]
+                        .filter(Boolean)
+                        .join(" • ")}
+                    </option>
+                  )
+                )}
+              </select>
+
+              {selectedStockItem ? (
+                <div style={selectedPartStyle}>
+                  <div
+                    style={
+                      selectedPartNameStyle
+                    }
+                  >
+                    {selectedStockItem.name}
+                  </div>
+
+                  <div
+                    style={
+                      selectedPartMetaStyle
+                    }
+                  >
+                    {selectedStockItem.manufacturer ||
+                      "Unknown manufacturer"}
+
+                    {selectedStockItem.code
+                      ? ` • ${selectedStockItem.code}`
+                      : ""}
+
+                    {selectedStockItem.category
+                      ? ` • ${selectedStockItem.category}`
+                      : ""}
+
+                    {selectedStockItem.subcategory
+                      ? ` / ${selectedStockItem.subcategory}`
+                      : ""}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div style={manualBoxStyle}>
+              <div style={catalogueHeaderStyle}>
+                <div>
+                  <div
+                    style={
+                      catalogueTitleStyle
+                    }
+                  >
+                    Manual Part Entry
+                  </div>
+
+                  <div
+                    style={
+                      catalogueSubStyle
+                    }
+                  >
+                    Use this only when the
+                    part does not exist in the
+                    SeCoStock catalogue.
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={
+                    handleReturnToCatalogue
+                  }
+                  style={textButtonStyle}
+                >
+                  Use Catalogue
+                </button>
+              </div>
+            </div>
+          )}
 
           <div style={twoColStyle}>
             <Field label="Part Name">
@@ -486,14 +683,28 @@ export function AddPartActionModal({
                   setTitle(e.target.value)
                 }
                 style={inputStyle}
+                readOnly={
+                  usingCatalogue &&
+                  !!selectedItemId
+                }
+                placeholder={
+                  usingCatalogue
+                    ? "Select a catalogue item"
+                    : "Enter part name"
+                }
               />
             </Field>
 
             <Field label="Quantity">
               <input
+                type="number"
+                min="1"
+                step="1"
                 value={quantity}
                 onChange={(e) =>
-                  setQuantity(e.target.value)
+                  setQuantity(
+                    e.target.value
+                  )
                 }
                 style={inputStyle}
               />
@@ -501,11 +712,47 @@ export function AddPartActionModal({
           </div>
 
           <div style={twoColStyle}>
-            <Field label="Category">
+            <Field label="Manufacturer">
+              <input
+                value={manufacturer}
+                onChange={(e) =>
+                  setManufacturer(
+                    e.target.value
+                  )
+                }
+                style={inputStyle}
+                readOnly={
+                  usingCatalogue &&
+                  !!selectedItemId
+                }
+              />
+            </Field>
+
+            <Field label="Part Code">
+              <input
+                value={partCode}
+                onChange={(e) =>
+                  setPartCode(
+                    e.target.value
+                  )
+                }
+                style={inputStyle}
+                readOnly={
+                  usingCatalogue &&
+                  !!selectedItemId
+                }
+              />
+            </Field>
+          </div>
+
+          <div style={twoColStyle}>
+            <Field label="Site Category">
               <select
                 value={category}
                 onChange={(e) =>
-                  setCategory(e.target.value)
+                  setCategory(
+                    e.target.value
+                  )
                 }
                 style={inputStyle}
               >
@@ -531,7 +778,8 @@ export function AddPartActionModal({
                 value={sourceType}
                 onChange={(e) =>
                   setSourceType(
-                    e.target.value as PartSourceType
+                    e.target
+                      .value as PartSourceType
                   )
                 }
                 style={inputStyle}
@@ -550,30 +798,6 @@ export function AddPartActionModal({
             </Field>
           </div>
 
-          <div style={twoColStyle}>
-            <Field label="Manufacturer">
-              <input
-                value={manufacturer}
-                onChange={(e) =>
-                  setManufacturer(
-                    e.target.value
-                  )
-                }
-                style={inputStyle}
-              />
-            </Field>
-
-            <Field label="Part Code">
-              <input
-                value={partCode}
-                onChange={(e) =>
-                  setPartCode(e.target.value)
-                }
-                style={inputStyle}
-              />
-            </Field>
-          </div>
-
           <Field label="Location">
             <input
               value={locationText}
@@ -583,6 +807,7 @@ export function AddPartActionModal({
                 )
               }
               style={inputStyle}
+              placeholder="e.g. Main entrance, first floor corridor..."
             />
           </Field>
 
@@ -595,6 +820,7 @@ export function AddPartActionModal({
                 )
               }
               style={inputStyle}
+              placeholder="Optional asset reference"
             />
           </Field>
 
@@ -606,10 +832,11 @@ export function AddPartActionModal({
               }
               style={textareaStyle}
               rows={4}
+              placeholder="Optional note"
             />
           </Field>
 
-          {messages.length > 0 && (
+          {messages.length > 0 ? (
             <div style={messageBoxStyle}>
               {messages.map(
                 (message, index) => (
@@ -621,7 +848,7 @@ export function AddPartActionModal({
                 )
               )}
             </div>
-          )}
+          ) : null}
         </div>
 
         <div style={actionsStyle}>
@@ -639,7 +866,7 @@ export function AddPartActionModal({
           >
             {saving
               ? "Saving..."
-              : "Save Part Action"}
+              : "Save Part"}
           </PrimaryButton>
         </div>
       </div>
@@ -715,8 +942,73 @@ const contentStyle: React.CSSProperties = {
 
 const twoColStyle: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "1fr 1fr",
+  gridTemplateColumns:
+    "repeat(auto-fit, minmax(220px, 1fr))",
   gap: "10px",
+};
+
+const catalogueBoxStyle: React.CSSProperties = {
+  border: "1px solid #bfdbfe",
+  background: "#eff6ff",
+  borderRadius: "18px",
+  padding: "14px",
+};
+
+const manualBoxStyle: React.CSSProperties = {
+  border: "1px solid #fed7aa",
+  background: "#fff7ed",
+  borderRadius: "18px",
+  padding: "14px",
+};
+
+const catalogueHeaderStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  gap: "12px",
+  marginBottom: "12px",
+};
+
+const catalogueTitleStyle: React.CSSProperties = {
+  fontWeight: 900,
+  color: "#0f172a",
+};
+
+const catalogueSubStyle: React.CSSProperties = {
+  marginTop: "4px",
+  color: "#64748b",
+  fontSize: "0.86rem",
+  lineHeight: 1.4,
+};
+
+const textButtonStyle: React.CSSProperties = {
+  border: "none",
+  background: "transparent",
+  color: "#2563eb",
+  padding: 0,
+  fontWeight: 900,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
+const selectedPartStyle: React.CSSProperties = {
+  marginTop: "10px",
+  borderRadius: "14px",
+  padding: "12px",
+  background: "#ffffff",
+  border: "1px solid #bfdbfe",
+};
+
+const selectedPartNameStyle: React.CSSProperties = {
+  fontWeight: 900,
+  color: "#111827",
+};
+
+const selectedPartMetaStyle: React.CSSProperties = {
+  marginTop: "4px",
+  color: "#64748b",
+  fontSize: "0.84rem",
+  fontWeight: 700,
 };
 
 const messageBoxStyle: React.CSSProperties = {

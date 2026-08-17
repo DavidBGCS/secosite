@@ -1,5 +1,3 @@
-// src/core/types/parts.ts
-
 export type PartDiscipline =
   | "fire-alarm"
   | "intruder-alarm"
@@ -21,7 +19,14 @@ export type PartSourceType =
   | "supplier"
   | "other";
 
-export type InstalledPartStatus = "installed" | "temporary" | "removed";
+export type PartCatalogueSource =
+  | "secostock"
+  | "manual";
+
+export type InstalledPartStatus =
+  | "installed"
+  | "temporary"
+  | "removed";
 
 export type InstalledPartRecord = {
   id: string;
@@ -29,6 +34,26 @@ export type InstalledPartRecord = {
 
   discipline: PartDiscipline;
 
+  /**
+   * Optional reference back to the master SeCoStock catalogue item.
+   *
+   * Existing/manual records may not have this.
+   */
+  catalogueItemId?: string;
+
+  /**
+   * Indicates whether the part came from the SeCoStock catalogue
+   * or was manually entered.
+   */
+  catalogueSource?: PartCatalogueSource;
+
+  /**
+   * Snapshot fields.
+   *
+   * These are intentionally retained even when catalogueItemId exists,
+   * so historical records do not change if the catalogue item is edited
+   * in the future.
+   */
   title: string;
   manufacturer?: string;
   partCode?: string;
@@ -60,6 +85,22 @@ export type PartActionRecord = {
   engineerName: string;
   engineerUserId?: string;
 
+  /**
+   * Optional reference back to the master SeCoStock catalogue item.
+   *
+   * Existing/manual records may not have this.
+   */
+  catalogueItemId?: string;
+
+  /**
+   * Indicates whether the engineer selected a catalogue item
+   * or entered the part manually.
+   */
+  catalogueSource?: PartCatalogueSource;
+
+  /**
+   * Snapshot fields retained for historical accuracy.
+   */
   title: string;
   manufacturer?: string;
   partCode?: string;
@@ -111,7 +152,10 @@ export const PART_SOURCE_OPTIONS: Array<{
   { value: "other", label: "Other" },
 ];
 
-export const PART_CATEGORY_OPTIONS: Record<PartDiscipline, string[]> = {
+export const PART_CATEGORY_OPTIONS: Record<
+  PartDiscipline,
+  string[]
+> = {
   "fire-alarm": [
     "detector",
     "base",
@@ -125,6 +169,7 @@ export const PART_CATEGORY_OPTIONS: Record<PartDiscipline, string[]> = {
     "cable",
     "other",
   ],
+
   "intruder-alarm": [
     "pir",
     "contact",
@@ -138,6 +183,7 @@ export const PART_CATEGORY_OPTIONS: Record<PartDiscipline, string[]> = {
     "cable",
     "other",
   ],
+
   cctv: [
     "camera",
     "nvr",
@@ -151,6 +197,7 @@ export const PART_CATEGORY_OPTIONS: Record<PartDiscipline, string[]> = {
     "cable",
     "other",
   ],
+
   "access-control": [
     "reader",
     "controller",
@@ -163,6 +210,7 @@ export const PART_CATEGORY_OPTIONS: Record<PartDiscipline, string[]> = {
     "cable",
     "other",
   ],
+
   "emergency-lighting": [
     "fitting",
     "battery",
@@ -172,5 +220,6 @@ export const PART_CATEGORY_OPTIONS: Record<PartDiscipline, string[]> = {
     "cable",
     "other",
   ],
+
   other: ["other"],
 };

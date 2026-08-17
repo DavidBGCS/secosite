@@ -63,7 +63,9 @@ function sortAssets(assets: AssetRecord[]): AssetRecord[] {
 
 function getLatestVisit(siteFile: SiteFile) {
   return [...siteFile.visits].sort((a, b) =>
-    (b.completedAt ?? b.startedAt ?? "").localeCompare(a.completedAt ?? a.startedAt ?? "")
+    (b.completedAt ?? b.startedAt ?? "").localeCompare(
+      a.completedAt ?? a.startedAt ?? ""
+    )
   )[0];
 }
 
@@ -254,13 +256,8 @@ export function ServicePage() {
         }
       }
 
-      if (!tick) {
-        throw new Error("Could not create service entry for note.");
-      }
-
-      if (tick.locked) {
-        throw new Error("This service entry is locked and the note cannot be changed.");
-      }
+      if (!tick) throw new Error("Could not create service entry for note.");
+      if (tick.locked) throw new Error("This service entry is locked and the note cannot be changed.");
 
       tick.note = noteValue || undefined;
       tick.visitId = activeVisit.id;
@@ -313,6 +310,8 @@ export function ServicePage() {
     );
   }
 
+  const siteFileId = siteFile.metadata.siteFileId;
+
   return (
     <AppLayout
       title="Service"
@@ -327,6 +326,45 @@ export function ServicePage() {
       }}
     >
       <div style={pageGridStyle}>
+        <Card>
+          <CardTitle>Hands-Free Test Mode</CardTitle>
+          <div style={handsFreePanelStyle}>
+            <div>
+              <div style={handsFreeTitleStyle}>Guided voice testing</div>
+              <div style={handsFreeTextStyle}>
+                Upload zone TXT files, generate the test sequence, use voice prompts,
+                and record PASS / FAIL / SKIP from your phone.
+              </div>
+            </div>
+
+           
+            <button
+  type="button"
+  onClick={() => navigate(`/site/${siteFile.metadata.siteFileId}/test-mode`)}
+  style={{
+    width: "100%",
+    minHeight: 64,
+    borderRadius: 18,
+    border: "none",
+    background: "#2563eb",
+    color: "#fff",
+    fontWeight: 900,
+    fontSize: 18,
+    marginBottom: 14,
+  }}
+>
+  Start Hands-Free Test Mode
+</button>
+
+            <PrimaryButton
+              onClick={() => navigate(`/site/${siteFileId}/test-mode`)}
+              style={handsFreeButtonStyle}
+            >
+              Start Hands-Free Test Mode
+            </PrimaryButton>
+          </div>
+        </Card>
+
         {progress ? (
           <div style={stickyProgressWrapStyle}>
             <div style={stickyProgressShellStyle}>
@@ -386,15 +424,11 @@ export function ServicePage() {
               </div>
 
               <div style={blockedActionGridStyle}>
-                <PrimaryButton
-                  onClick={() => navigate(`/site/${siteFile.metadata.siteFileId}/overview`)}
-                >
+                <PrimaryButton onClick={() => navigate(`/site/${siteFileId}/overview`)}>
                   Start Visit from Overview
                 </PrimaryButton>
 
-                <SecondaryButton
-                  onClick={() => navigate(`/site/${siteFile.metadata.siteFileId}/assets`)}
-                >
+                <SecondaryButton onClick={() => navigate(`/site/${siteFileId}/assets`)}>
                   View Asset Register
                 </SecondaryButton>
               </div>
@@ -419,7 +453,7 @@ export function ServicePage() {
 
               <SecondaryButton
                 onClick={() =>
-                  navigate(`/site/${siteFile.metadata.siteFileId}/visit/${activeVisit.id}`, {
+                  navigate(`/site/${siteFileId}/visit/${activeVisit.id}`, {
                     state: { visit: activeVisit },
                   })
                 }
@@ -464,9 +498,7 @@ export function ServicePage() {
                 {showFilters ? "Hide Filters" : "Show Filters"}
               </SecondaryButton>
 
-              <SecondaryButton
-                onClick={() => navigate(`/site/${siteFile.metadata.siteFileId}/overview`)}
-              >
+              <SecondaryButton onClick={() => navigate(`/site/${siteFileId}/overview`)}>
                 Back to Overview
               </SecondaryButton>
             </div>
@@ -596,9 +628,7 @@ export function ServicePage() {
                       </SecondaryButton>
 
                       <SecondaryButton
-                        onClick={() =>
-                          navigate(`/site/${siteFile.metadata.siteFileId}/assets/${asset.id}/history`)
-                        }
+                        onClick={() => navigate(`/site/${siteFileId}/assets/${asset.id}/history`)}
                         disabled={saving}
                         style={compactButtonStyle}
                       >
@@ -633,9 +663,7 @@ export function ServicePage() {
                           </SecondaryButton>
 
                           <SecondaryButton
-                            onClick={() =>
-                              navigate(`/site/${siteFile.metadata.siteFileId}/assets`)
-                            }
+                            onClick={() => navigate(`/site/${siteFileId}/assets`)}
                             disabled={saving}
                           >
                             Asset Register
@@ -675,6 +703,32 @@ function Chip({
     </button>
   );
 }
+
+const handsFreePanelStyle: React.CSSProperties = {
+  display: "grid",
+  gap: "12px",
+  padding: "16px",
+  borderRadius: "18px",
+  background: "linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%)",
+  border: "1px solid #bfdbfe",
+};
+
+const handsFreeTitleStyle: React.CSSProperties = {
+  fontSize: "1rem",
+  fontWeight: 900,
+  color: "#1d4ed8",
+};
+
+const handsFreeTextStyle: React.CSSProperties = {
+  marginTop: "6px",
+  color: "#475569",
+  lineHeight: 1.5,
+};
+
+const handsFreeButtonStyle: React.CSSProperties = {
+  minHeight: "52px",
+  fontSize: "1rem",
+};
 
 const pageGridStyle: React.CSSProperties = {
   display: "grid",

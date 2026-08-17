@@ -20,11 +20,7 @@ import { AssetHistoryPage } from "../../ui/pages/AssetHistoryPage";
 import { AssetEditPage } from "../../ui/pages/AssetEditPage";
 import { SitePartsPage } from "../../ui/pages/SitePartsPage";
 import { SitePartsHistoryPage } from "../../ui/pages/SitePartsHistoryPage";
-
-
-
-
-
+import { ServiceTestModePage } from "../../ui/pages/ServiceTestModePage";
 
 function Protected({ children }: { children: React.ReactNode }) {
   return <PrivateRoute>{children}</PrivateRoute>;
@@ -35,6 +31,15 @@ export function AppRoutes() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+
+        <Route
+          path="/test-mode"
+          element={
+            <Protected>
+              <ServiceTestModePage />
+            </Protected>
+          }
+        />
 
         <Route
           path="/"
@@ -80,7 +85,7 @@ export function AppRoutes() {
             </Protected>
           }
         />
-        
+
         <Route
           path="/site/:siteFileId/disciplines"
           element={
@@ -97,13 +102,22 @@ export function AppRoutes() {
               <ServicePage />
             </Protected>
           }
-        />        
+        />
 
         <Route
           path="/site/:siteFileId/assets"
           element={
             <Protected>
               <AssetsPage />
+            </Protected>
+          }
+        />
+
+        <Route
+          path="/site/:siteFileId/test-mode"
+          element={
+            <Protected>
+              <ServiceTestModePage />
             </Protected>
           }
         />
@@ -116,7 +130,6 @@ export function AppRoutes() {
             </Protected>
           }
         />
-
 
         <Route
           path="/site/:siteFileId/visit/new"
@@ -163,7 +176,7 @@ export function AppRoutes() {
           }
         />
 
-         <Route
+        <Route
           path="/site/:siteFileId/assets/:assetId/history"
           element={
             <Protected>
@@ -171,7 +184,7 @@ export function AppRoutes() {
             </Protected>
           }
         />
-       
+
         <Route
           path="/site/:siteFileId/assets/:assetId/edit"
           element={
@@ -189,8 +202,6 @@ export function AppRoutes() {
             </Protected>
           }
         />
-
-
 
         <Route
           path="/site/:siteFileId/reports"

@@ -303,6 +303,18 @@ export function VisitEntryPage() {
               </div>
 
               <div style={quickNavGridStyle}>
+                <PrimaryButton
+                  onClick={() => navigate(`/site/${siteFile.metadata.siteFileId}/test-mode`)}
+                  style={{
+                    ...navButtonStyle,
+                    gridColumn: "1 / -1",
+                    background: "#2563eb",
+                    color: "#ffffff",
+                  }}
+                >
+                  Hands-Free Test Mode
+                </PrimaryButton>
+
                 <SecondaryButton
                   onClick={() => navigate(`/site/${siteFile.metadata.siteFileId}/service`)}
                   style={navButtonStyle}
